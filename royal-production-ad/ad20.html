@@ -1,0 +1,448 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Montserrat:wght@500;700;800&display=block" rel="stylesheet">
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+</head><body>
+<canvas id="c"></canvas>
+<script>
+const W = +(new URLSearchParams(location.search).get('w') || 1080);
+const H = +(new URLSearchParams(location.search).get('h') || 1920);
+const c = document.getElementById('c'); c.width = W; c.height = H;
+const x = c.getContext('2d');
+const GOLD = '#d9ad57', GOLD2 = '#f6dc9a', RED = '#ff3b30';
+const S = Math.min(W, H) / 1080;           // scale unit
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eo = p => 1 - Math.pow(1 - p, 3);
+const eio = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+const back = p => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+
+// seeded noise frames for film grain
+function rng(s) { return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+const grain = [];
+for (let k = 0; k < 6; k++) {
+  const g = document.createElement('canvas'); g.width = 270; g.height = 480;
+  const gx = g.getContext('2d'), id = gx.createImageData(270, 480), r = rng(k * 977 + 13);
+  for (let i = 0; i < id.data.length; i += 4) { const v = r() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 22; }
+  gx.putImageData(id, 0, 0); grain.push(g);
+}
+
+const logo = new Image(); logo.src = 'logo.png';
+let logoGold;  // gold-tinted copy for shine
+function prepLogo() {
+  const g = document.createElement('canvas'); g.width = logo.width; g.height = logo.height;
+  const gx = g.getContext('2d'); gx.drawImage(logo, 0, 0);
+  gx.globalCompositeOperation = 'source-atop'; gx.fillStyle = GOLD2; gx.fillRect(0, 0, g.width, g.height);
+  logoGold = g;
+}
+
+function text(str, px, py, size, font, color, opts = {}) {
+  x.save();
+  x.font = `${opts.weight || ''} ${size}px ${font}`;
+  x.textAlign = opts.align || 'center'; x.textBaseline = 'middle';
+  if (opts.spacing) x.letterSpacing = opts.spacing + 'px';
+  x.globalAlpha *= opts.alpha ?? 1;
+  if (opts.stroke) { x.lineWidth = opts.stroke; x.strokeStyle = color; x.strokeText(str, px, py); }
+  else { x.fillStyle = color; x.fillText(str, px, py); }
+  x.restore();
+}
+// text revealed by sliding up from behind a mask line
+function maskText(str, px, py, size, font, color, p, opts = {}) {
+  x.save();
+  x.beginPath(); x.rect(0, py - size * .75, W, size * 1.5); x.clip();
+  text(str, px, py + (1 - eo(p)) * size * 1.4, size, font, color, opts);
+  x.restore();
+}
+
+function background(t) {
+  const g = x.createRadialGradient(W / 2, H * .45, 0, W / 2, H * .45, H * .8);
+  g.addColorStop(0, '#1c1712'); g.addColorStop(.55, '#0b0a09'); g.addColorStop(1, '#000');
+  x.fillStyle = g; x.fillRect(0, 0, W, H);
+  // drifting light leaks
+  x.save(); x.globalCompositeOperation = 'lighter';
+  const leaks = [[.2, .25, 0, 'rgba(217,173,87,'], [.85, .7, 2, 'rgba(255,120,60,'], [.5, .95, 4, 'rgba(217,173,87,']];
+  for (const [lx, ly, ph, col] of leaks) {
+    const cx = W * (lx + .12 * Math.sin(t * .6 + ph)), cy = H * (ly + .06 * Math.cos(t * .5 + ph)), r = 520 * S;
+    const lg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+    lg.addColorStop(0, col + '0.16)'); lg.addColorStop(1, col + '0)');
+    x.fillStyle = lg; x.fillRect(0, 0, W, H);
+  }
+  x.restore();
+}
+
+function viewfinder(t, a) {
+  if (a <= 0) return;
+  x.save(); x.globalAlpha = a;
+  const m = 70 * S, L = 110 * S;
+  x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 5 * S;
+  const corners = [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]];
+  for (const [cx, cy, dx, dy] of corners) {
+    x.beginPath(); x.moveTo(cx, cy + dy * L); x.lineTo(cx, cy); x.lineTo(cx + dx * L, cy); x.stroke();
+  }
+  // REC
+  if (Math.floor(t * 2) % 2 === 0) { x.fillStyle = RED; x.beginPath(); x.arc(m + 50 * S, m + 70 * S, 14 * S, 0, 7); x.fill(); }
+  text('REC', m + 80 * S, m + 71 * S, 38 * S, 'Montserrat', '#fff', { weight: 700, align: 'left', spacing: 4 * S });
+  const f = Math.floor(t * 25) % 25, s = Math.floor(t);
+  text(`00:00:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`, W - m - 40 * S, m + 71 * S, 34 * S, 'Montserrat', '#fff', { weight: 500, align: 'right' });
+  text('4K  •  60FPS', m + 40 * S, H - m - 60 * S, 30 * S, 'Montserrat', 'rgba(255,255,255,.8)', { weight: 500, align: 'left', spacing: 3 * S });
+  // battery
+  const bx = W - m - 140 * S, by = H - m - 78 * S;
+  x.strokeStyle = '#fff'; x.lineWidth = 3 * S; x.strokeRect(bx, by, 90 * S, 36 * S);
+  x.fillStyle = '#fff'; x.fillRect(bx + 92 * S, by + 10 * S, 8 * S, 16 * S); x.fillRect(bx + 6 * S, by + 6 * S, 64 * S, 24 * S);
+  // focus cross
+  x.strokeStyle = 'rgba(255,255,255,.5)'; x.lineWidth = 2 * S;
+  const fc = 26 * S; x.beginPath(); x.moveTo(W / 2 - fc, H / 2); x.lineTo(W / 2 + fc, H / 2); x.moveTo(W / 2, H / 2 - fc); x.lineTo(W / 2, H / 2 + fc); x.stroke();
+  x.restore();
+}
+
+// ---------- 20s VERSION SCENES ----------
+const SIL = '#090705';
+const DUR = 20;
+// timeline (seconds)
+const T_WED = 2.6, T_BTS = 6.8, T_LOVE = 11.0, T_LOGO = 15.2;
+
+// ---- silhouette helpers (feet at 0,0 ; height = 1) ----
+function groom(px, py, h, lean = 0) {
+  x.save(); x.translate(px, py); x.scale(h, h); x.fillStyle = SIL;
+  x.beginPath(); x.arc(0.01 + lean * .04, -0.925, 0.062, 0, 7); x.fill();
+  x.beginPath();
+  x.moveTo(-0.03, -0.86); x.lineTo(0.04, -0.86);                 // neck
+  x.lineTo(0.13, -0.82); x.quadraticCurveTo(0.15, -0.78, 0.145, -0.7); // right shoulder
+  x.lineTo(0.15, -0.46); x.lineTo(0.11, -0.45); x.lineTo(0.105, -0.5);
+  x.lineTo(0.095, -0.44); x.lineTo(0.085, 0); x.lineTo(0.02, 0); x.lineTo(0.005, -0.38);
+  x.lineTo(-0.015, 0); x.lineTo(-0.08, 0); x.lineTo(-0.09, -0.44);
+  x.lineTo(-0.1, -0.5); x.lineTo(-0.105, -0.45); x.lineTo(-0.145, -0.46);
+  x.lineTo(-0.14, -0.7); x.quadraticCurveTo(-0.145, -0.78, -0.12, -0.82); x.closePath(); x.fill();
+  x.restore();
+}
+function bride(px, py, h, veilWave = 0, glow = 'rgba(255,240,220,.28)') {
+  x.save(); x.translate(px, py); x.scale(h, h);
+  // veil (translucent, flowing back to the right)
+  x.fillStyle = glow;
+  x.beginPath(); x.moveTo(0.01, -0.95);
+  x.bezierCurveTo(0.2, -0.85 + veilWave * .02, 0.28, -0.45, 0.36 + veilWave * .03, -0.08);
+  x.lineTo(0.12, -0.12); x.bezierCurveTo(0.1, -0.5, 0.06, -0.8, 0.04, -0.9); x.closePath(); x.fill();
+  x.fillStyle = SIL;
+  x.beginPath(); x.arc(0, -0.87, 0.057, 0, 7); x.fill();
+  x.beginPath(); x.arc(0.035, -0.9, 0.035, 0, 7); x.fill();          // hair bun
+  x.beginPath();
+  x.moveTo(-0.025, -0.81); x.lineTo(0.025, -0.81);
+  x.lineTo(0.085, -0.77); x.lineTo(0.06, -0.62); x.lineTo(0.05, -0.55);
+  x.bezierCurveTo(0.12, -0.4, 0.26, -0.15, 0.32, 0);
+  x.lineTo(-0.3, 0);
+  x.bezierCurveTo(-0.24, -0.15, -0.12, -0.4, -0.05, -0.55);
+  x.lineTo(-0.06, -0.62); x.lineTo(-0.085, -0.77); x.closePath(); x.fill();
+  // bouquet
+  for (const [bx, by, r] of [[-0.09, -0.56, .035], [-0.06, -0.59, .03], [-0.12, -0.59, .028], [-0.095, -0.62, .025]]) { x.beginPath(); x.arc(bx, by, r, 0, 7); x.fill(); }
+  x.restore();
+}
+function legs(px, py, h, w = .08) { x.fillRect(px - w * h, py - .45 * h, w * 2 * h, .45 * h); }
+// videographer with shoulder-rig camera, facing right
+function videographer(px, py, h, t) {
+  x.save(); x.translate(px, py); x.scale(h, h); x.fillStyle = SIL;
+  x.beginPath(); x.arc(0, -0.92, 0.062, 0, 7); x.fill();
+  x.beginPath();
+  x.moveTo(-0.13, -0.82); x.lineTo(0.12, -0.82); x.lineTo(0.13, -0.5); x.lineTo(0.1, -0.44);
+  x.lineTo(0.17, -0.02); x.lineTo(0.22, 0); x.lineTo(0.11, 0); x.lineTo(0.0, -0.36);
+  x.lineTo(-0.1, 0); x.lineTo(-0.2, 0); x.lineTo(-0.15, -0.03); x.lineTo(-0.1, -0.44); x.lineTo(-0.13, -0.5); x.closePath(); x.fill();
+  // camera body on shoulder + lens + hood + handle
+  x.fillRect(-0.02, -0.98, 0.26, 0.11);
+  x.fillRect(0.24, -0.965, 0.13, 0.08);
+  x.beginPath(); x.moveTo(0.37, -0.98); x.lineTo(0.42, -1.0); x.lineTo(0.42, -0.85); x.lineTo(0.37, -0.87); x.fill();
+  x.fillRect(0.02, -1.04, 0.16, 0.025); x.fillRect(0.03, -1.04, 0.02, 0.07); x.fillRect(0.15, -1.04, 0.02, 0.07);
+  x.fillRect(-0.12, -0.96, 0.1, 0.06); // battery/viewfinder
+  // arm reaching to lens
+  x.lineWidth = .055; x.lineCap = 'round'; x.strokeStyle = SIL;
+  x.beginPath(); x.moveTo(0.1, -0.78); x.lineTo(0.2, -0.7); x.lineTo(0.3, -0.86); x.stroke();
+  x.restore();
+  // tally light
+  if (Math.floor(t * 2) % 2 === 0) { x.fillStyle = RED; x.beginPath(); x.arc(px + 0.2 * h, py - 1.0 * h, 0.012 * h, 0, 7); x.fill(); }
+}
+// photographer holding camera to face, facing left; returns flash point
+function photographer(px, py, h) {
+  x.save(); x.translate(px, py); x.scale(h, h); x.fillStyle = SIL;
+  x.beginPath(); x.arc(0, -0.9, 0.062, 0, 7); x.fill();
+  x.beginPath();
+  x.moveTo(-0.12, -0.81); x.lineTo(0.13, -0.81); x.lineTo(0.14, -0.5); x.lineTo(0.1, -0.44);
+  x.lineTo(0.2, -0.24); x.lineTo(0.16, 0); x.lineTo(0.08, 0); x.lineTo(0.11, -0.22); x.lineTo(0.0, -0.36);
+  x.lineTo(-0.06, 0); x.lineTo(-0.14, 0); x.lineTo(-0.1, -0.44); x.lineTo(-0.13, -0.5); x.closePath(); x.fill();
+  x.fillRect(-0.2, -0.95, 0.12, 0.09);                // camera
+  x.fillRect(-0.27, -0.935, 0.08, 0.06);              // lens
+  x.fillRect(-0.16, -1.0, 0.05, 0.05);                // flash head
+  x.lineWidth = .05; x.lineCap = 'round'; x.strokeStyle = SIL;
+  x.beginPath(); x.moveTo(-0.08, -0.78); x.lineTo(-0.17, -0.7); x.lineTo(-0.2, -0.88); x.stroke();
+  x.beginPath(); x.moveTo(0.1, -0.78); x.lineTo(0.15, -0.62); x.lineTo(-0.1, -0.88); x.stroke();
+  x.restore();
+  return [px - 0.135 * h, py - 0.975 * h];
+}
+function softbox(px, py, h, dir) {
+  x.save(); x.fillStyle = SIL; x.strokeStyle = SIL; x.lineWidth = 6 * S;
+  // tripod
+  x.beginPath(); x.moveTo(px, py - h * .55); x.lineTo(px - h * .12, py); x.moveTo(px, py - h * .55); x.lineTo(px + h * .12, py); x.moveTo(px, py - h * .55); x.lineTo(px, py - h * .2); x.stroke();
+  x.beginPath(); x.moveTo(px, py - h * .55); x.lineTo(px, py - h * .7); x.stroke();
+  // glowing panel
+  x.translate(px, py - h * .82); x.rotate(dir * .25);
+  const g = x.createRadialGradient(0, 0, 0, 0, 0, h * .55); g.addColorStop(0, 'rgba(255,240,215,.45)'); g.addColorStop(1, 'rgba(255,240,215,0)');
+  x.fillStyle = g; x.fillRect(-h * .6, -h * .6, h * 1.2, h * 1.2);
+  x.fillStyle = '#fff6e6'; x.fillRect(-h * .13, -h * .16, h * .26, h * .32);
+  x.strokeStyle = SIL; x.lineWidth = 5 * S; x.strokeRect(-h * .13, -h * .16, h * .26, h * .32);
+  x.restore();
+}
+function drone(px, py, s, t) {
+  x.save(); x.translate(px, py); x.rotate(Math.sin(t * 2) * .06); x.fillStyle = SIL; x.strokeStyle = SIL;
+  x.lineWidth = s * .06;
+  x.beginPath(); x.moveTo(-s, -s * .1); x.lineTo(s, -s * .1); x.stroke();
+  x.fillRect(-s * .28, -s * .22, s * .56, s * .26);
+  x.fillRect(-s * .08, s * .04, s * .16, s * .12);
+  for (const d of [-1, 1]) {
+    x.fillRect(d * s - s * .04, -s * .3, s * .08, s * .2);
+    const w = s * (.35 + .3 * Math.abs(Math.sin(t * 40 + d)));
+    x.globalAlpha *= .8; x.beginPath(); x.ellipse(d * s, -s * .32, w, s * .04, 0, 0, 7); x.fill(); x.globalAlpha /= .8;
+  }
+  if (Math.floor(t * 3) % 2) { x.fillStyle = RED; x.beginPath(); x.arc(s * .25, -s * .1, s * .05, 0, 7); x.fill(); }
+  x.restore();
+}
+function heart(px, py, s) {
+  x.beginPath(); x.moveTo(px, py + s * .35);
+  x.bezierCurveTo(px - s * 1.1, py - s * .35, px - s * .45, py - s * 1.05, px, py - s * .45);
+  x.bezierCurveTo(px + s * .45, py - s * 1.05, px + s * 1.1, py - s * .35, px, py + s * .35); x.fill();
+}
+function sceneAlpha(t, a, b, fi = .2, fo = .2) { return prog(t, a, a + fi) * (1 - prog(t, b - fo, b)); }
+function titleBlock(t0, t, title, sub, sub2, yT = .14) {
+  const lt = t - t0;
+  // dark top gradient for legibility
+  const g = x.createLinearGradient(0, 0, 0, H * .32); g.addColorStop(0, 'rgba(0,0,0,.75)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  x.fillStyle = g; x.fillRect(0, 0, W, H * .32);
+  maskText(title, W / 2, H * yT, 122 * S, 'Anton', '#fff', prog(lt, .2, .7), { spacing: 4 * S });
+  const lp = eo(prog(lt, .5, 1.1)); x.fillStyle = GOLD; x.fillRect(W / 2 - 160 * S * lp, H * yT + 100 * S, 320 * S * lp, 4 * S);
+  maskText(sub, W / 2, H * yT + 160 * S, 40 * S, 'Montserrat', GOLD2, prog(lt, .7, 1.2), { weight: 700, spacing: 4 * S });
+  if (sub2) {
+    const g2 = x.createLinearGradient(0, H * .78, 0, H); g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, 'rgba(0,0,0,.8)');
+    x.fillStyle = g2; x.fillRect(0, H * .78, W, H * .22);
+    maskText(sub2, W / 2, H * .9, 40 * S, 'Montserrat', '#fff', prog(lt, 1.0, 1.5), { weight: 700, spacing: 2 * S });
+  }
+}
+
+// ---- Scene 1: intro (0 – T_WED) ----
+function sIntro(t) {
+  const a = 1 - prog(t, T_WED - .2, T_WED);
+  if (a <= 0) return;
+  viewfinder(t, eo(prog(t, 0, .5)) * a);
+  x.save(); x.globalAlpha = a;
+  const zoom = 1 + t * .015; x.translate(W / 2, H / 2); x.scale(zoom, zoom); x.translate(-W / 2, -H / 2);
+  maskText('HAR BIR', W / 2, H / 2 - 300 * S, 190 * S, 'Anton', '#fff', prog(t, .3, .85), { spacing: 6 * S });
+  maskText('LAHZA', W / 2, H / 2 - 40 * S, 250 * S, 'Anton', GOLD, prog(t, .5, 1.05), { spacing: 8 * S });
+  maskText('TARIXGA AYLANADI', W / 2, H / 2 + 150 * S, 78 * S, 'Montserrat', '#fff', prog(t, 1.05, 1.6), { weight: 800, spacing: 10 * S });
+  const lp = eo(prog(t, 1.4, 2.1)); x.fillStyle = GOLD; x.fillRect(W / 2 - 220 * S * lp, H / 2 + 230 * S, 440 * S * lp, 5 * S);
+  x.restore();
+}
+
+// ---- Scene 2: wedding shoot ----
+function sWedding(t) {
+  const a = sceneAlpha(t, T_WED, T_BTS); if (a <= 0) return;
+  const lt = t - T_WED;
+  x.save(); x.globalAlpha = a;
+  // slow push-in camera
+  const z = 1.08 + lt * .03; x.translate(W / 2, H * .62); x.scale(z, z); x.translate(-W / 2, -H * .62);
+  // warm backdrop
+  const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#1a0f08'); bg.addColorStop(.6, '#5a3416'); bg.addColorStop(1, '#120a05');
+  x.fillStyle = bg; x.fillRect(-W, -H, W * 3, H * 3);
+  const gx = W / 2, gy = H * .55;
+  const glow = x.createRadialGradient(gx, gy, 0, gx, gy, 650 * S); glow.addColorStop(0, 'rgba(255,214,150,.95)'); glow.addColorStop(.35, 'rgba(240,160,80,.45)'); glow.addColorStop(1, 'rgba(240,160,80,0)');
+  x.fillStyle = glow; x.fillRect(-W, -H, W * 3, H * 3);
+  // floral arch
+  const ar = 330 * S, ay = H * .78;
+  x.fillStyle = SIL;
+  for (let i = 0; i <= 80; i++) {
+    const an = Math.PI + i / 80 * Math.PI, rr = ar + Math.sin(i * 2.3) * 14 * S;
+    x.beginPath(); x.arc(gx + Math.cos(an) * rr, ay - 160 * S + Math.sin(an) * rr * 1.35, (16 + 10 * Math.abs(Math.sin(i * 1.7))) * S, 0, 7); x.fill();
+  }
+  x.fillRect(gx - ar - 18 * S, ay - 170 * S, 36 * S, 170 * S); x.fillRect(gx + ar - 18 * S, ay - 170 * S, 36 * S, 170 * S);
+  // fairy lights (catenaries)
+  for (let k = 0; k < 3; k++) {
+    const y0 = H * (.2 + k * .07), sag = 120 * S;
+    for (let i = 0; i <= 22; i++) {
+      const u = i / 22, lx = -40 * S + u * (W + 80 * S), ly = y0 + Math.sin(u * Math.PI) * sag;
+      const tw = .55 + .45 * Math.sin(t * 5 + i * 1.3 + k);
+      const lg = x.createRadialGradient(lx, ly, 0, lx, ly, 22 * S); lg.addColorStop(0, `rgba(255,225,160,${tw})`); lg.addColorStop(1, 'rgba(255,225,160,0)');
+      x.fillStyle = lg; x.fillRect(lx - 22 * S, ly - 22 * S, 44 * S, 44 * S);
+    }
+  }
+  // ground
+  x.fillStyle = SIL; x.fillRect(-W, ay, W * 3, H);
+  // couple
+  const ch = 640 * S;
+  groom(gx - 75 * S, ay, ch, 1);
+  bride(gx + 75 * S, ay, ch * .93, Math.sin(t * 2));
+  x.restore();
+  // petals (screen space)
+  x.save(); x.globalAlpha = a;
+  for (let i = 0; i < 26; i++) {
+    const r = Math.sin(i * 91.7) * .5 + .5, sp = 120 + r * 160;
+    const py = ((lt * sp * S + i * 173 * S) % (H + 100 * S)) - 50 * S, px = (i * 211 * S + Math.sin(lt * 1.5 + i) * 60 * S) % W;
+    x.save(); x.translate(px, py); x.rotate(lt * 2 + i);
+    x.fillStyle = i % 3 ? 'rgba(255,190,200,.85)' : 'rgba(246,220,154,.9)';
+    x.beginPath(); x.ellipse(0, 0, 12 * S, 6 * S, 0, 0, 7); x.fill(); x.restore();
+  }
+  viewfinder(t, .9);
+  titleBlock(T_WED, t, 'TOʻY SYOMKASI', 'VIDEO  •  FOTO  •  DRON', 'Eng baxtli kuningiz — kinodek');
+  x.restore();
+}
+
+// ---- Scene 3: behind the scenes ----
+function sBTS(t) {
+  const a = sceneAlpha(t, T_BTS, T_LOVE); if (a <= 0) return;
+  const lt = t - T_BTS;
+  x.save(); x.globalAlpha = a;
+  const pan = -lt * 22 * S; x.translate(pan + 40 * S, 0);
+  const bg = x.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0d0c10'); bg.addColorStop(1, '#2a2118');
+  x.fillStyle = bg; x.fillRect(-W, 0, W * 3, H);
+  // backdrop paper + spot
+  const sp = x.createRadialGradient(W * .5, H * .6, 0, W * .5, H * .6, 700 * S); sp.addColorStop(0, 'rgba(217,173,87,.35)'); sp.addColorStop(1, 'rgba(217,173,87,0)');
+  x.fillStyle = sp; x.fillRect(-W, 0, W * 3, H);
+  const gy = H * .8;
+  softbox(W * .1, gy, 520 * S, 1);
+  softbox(W * .93, gy, 520 * S, -1);
+  // couple posing in the middle (smaller, lit)
+  groom(W * .52 - 40 * S, gy - 30 * S, 430 * S);
+  bride(W * .52 + 40 * S, gy - 30 * S, 400 * S, Math.sin(t * 2), 'rgba(255,240,220,.35)');
+  // crew in foreground (bigger)
+  x.fillStyle = SIL; x.fillRect(-W, gy + 40 * S, W * 3, H);
+  videographer(W * .14, gy + 160 * S, 720 * S, t);
+  const [fx, fy] = photographer(W * .88, gy + 160 * S, 700 * S);
+  // camera flash bursts
+  for (const ft of [.9, 2.3, 3.4]) {
+    const p = (lt - ft) / .35;
+    if (p > 0 && p < 1) {
+      const fa = p < .15 ? p / .15 : 1 - (p - .15) / .85;
+      const fg = x.createRadialGradient(fx, fy, 0, fx, fy, 900 * S); fg.addColorStop(0, `rgba(255,255,255,${fa})`); fg.addColorStop(.3, `rgba(255,255,255,${fa * .35})`); fg.addColorStop(1, 'rgba(255,255,255,0)');
+      x.fillStyle = fg; x.fillRect(-W, 0, W * 3, H);
+    }
+  }
+  // drone overhead
+  drone(W * (.25 + lt * .09), H * .36 + Math.sin(lt * 2) * 20 * S, 70 * S, t);
+  x.restore();
+  x.save(); x.globalAlpha = a;
+  titleBlock(T_BTS, t, 'SYOMKA JARAYONI', 'PROFESSIONAL JAMOA VA TEXNIKA', 'Kamera • Yorugʻlik • Dron • Montaj');
+  x.restore();
+}
+
+// ---- Scene 4: love story ----
+function sLove(t) {
+  const a = sceneAlpha(t, T_LOVE, T_LOGO); if (a <= 0) return;
+  const lt = t - T_LOVE;
+  x.save(); x.globalAlpha = a;
+  const sky = x.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, '#2b1630'); sky.addColorStop(.35, '#b4485a'); sky.addColorStop(.58, '#f2a05a'); sky.addColorStop(.7, '#ffd08a');
+  x.fillStyle = sky; x.fillRect(0, 0, W, H);
+  // sun
+  const sx = W * .5, sy = H * .66 - lt * 6 * S;
+  const sg = x.createRadialGradient(sx, sy, 0, sx, sy, 520 * S); sg.addColorStop(0, 'rgba(255,245,210,1)'); sg.addColorStop(.25, 'rgba(255,220,150,.8)'); sg.addColorStop(1, 'rgba(255,180,100,0)');
+  x.fillStyle = sg; x.fillRect(0, 0, W, H);
+  x.fillStyle = '#fff3d6'; x.beginPath(); x.arc(sx, sy, 120 * S, 0, 7); x.fill();
+  // far hills (parallax)
+  x.fillStyle = 'rgba(70,25,40,.75)';
+  x.beginPath(); x.moveTo(0, H);
+  for (let i = 0; i <= 20; i++) { const u = i / 20; x.lineTo(u * W, H * .7 + Math.sin(u * 7 + 1 + lt * .05) * 40 * S); }
+  x.lineTo(W, H); x.fill();
+  // near hill with couple
+  x.fillStyle = SIL;
+  x.beginPath(); x.moveTo(0, H);
+  for (let i = 0; i <= 30; i++) { const u = i / 30; x.lineTo(u * W, H * .78 - Math.sin(u * Math.PI) * 70 * S); }
+  x.lineTo(W, H); x.fill();
+  // couple walking toward each other then forehead-touch
+  const meet = eio(prog(lt, .2, 1.8)), cy = H * .78 - 68 * S, ch = 560 * S;
+  const gxp = W / 2 - 60 * S - (1 - meet) * 140 * S, bxp = W / 2 + 60 * S + (1 - meet) * 140 * S;
+  groom(gxp, cy, ch, meet);
+  bride(bxp, cy, ch * .93, Math.sin(t * 2), 'rgba(255,230,210,.22)');
+  // joined hands
+  x.strokeStyle = SIL; x.lineWidth = 22 * S; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(gxp + .14 * ch, cy - .55 * ch); x.quadraticCurveTo((gxp + bxp) / 2, cy - .42 * ch, bxp - .07 * ch, cy - .62 * ch); x.stroke();
+  // birds
+  x.strokeStyle = 'rgba(30,10,20,.8)'; x.lineWidth = 4 * S;
+  for (let i = 0; i < 5; i++) {
+    const bx = (W * .15 + i * 70 * S + lt * 60 * S), by = H * .3 + Math.sin(i * 2) * 40 * S, f = Math.sin(t * 9 + i) * 10 * S;
+    x.beginPath(); x.moveTo(bx - 18 * S, by - f); x.quadraticCurveTo(bx - 8 * S, by - 8 * S, bx, by); x.quadraticCurveTo(bx + 8 * S, by - 8 * S, bx + 18 * S, by - f); x.stroke();
+  }
+  // floating hearts
+  for (let i = 0; i < 14; i++) {
+    const r = Math.sin(i * 53.1) * .5 + .5, life = ((lt * (.25 + r * .2) + i * .37) % 1);
+    const hx = W * (.1 + .8 * ((i * .618) % 1)) + Math.sin(lt * 2 + i) * 30 * S, hy = H * (.85 - life * .6);
+    x.fillStyle = `rgba(255,${200 + Math.floor(r * 40)},${210 + Math.floor(r * 30)},${Math.sin(life * Math.PI) * .7})`;
+    heart(hx, hy, (14 + r * 22) * S);
+  }
+  // big heart forming between them when they meet
+  const hp = prog(lt, 1.8, 2.4);
+  if (hp > 0) { x.fillStyle = `rgba(255,120,140,${.85 * hp})`; heart(W / 2, cy - ch * 1.12, 46 * S * back(hp)); }
+  titleBlock(T_LOVE, t, 'LOVE STORY', 'SEVGI HIKOYANGIZ — KINO KABI', 'Har bir nigoh, har bir tabassum');
+  x.restore();
+}
+
+// ---- Scene 5: logo + CTA ----
+function sLogo(t) {
+  const lt = t - T_LOGO; if (lt < 0) return;
+  const fadeOut = 1 - prog(t, DUR - .45, DUR);
+  x.save(); x.globalAlpha = fadeOut;
+  x.save(); x.translate(W / 2, H * .42); x.rotate(lt * .15); x.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 12; i++) {
+    x.rotate(Math.PI / 6);
+    const g = x.createLinearGradient(0, 0, 0, -H * .6); g.addColorStop(0, 'rgba(217,173,87,.10)'); g.addColorStop(1, 'rgba(217,173,87,0)');
+    x.fillStyle = g; x.beginPath(); x.moveTo(0, 0); x.lineTo(-60 * S, -H * .6); x.lineTo(60 * S, -H * .6); x.closePath();
+    x.globalAlpha = fadeOut * prog(lt, .2, 1); x.fill();
+  }
+  x.restore();
+  const lp = prog(lt, 0, .9), lw = W * .86, lh = lw * logo.height / logo.width, sc = 1.25 - .25 * eo(lp);
+  x.save(); x.translate(W / 2, H * .38); x.scale(sc, sc); x.globalAlpha = fadeOut * eo(lp);
+  x.filter = `blur(${(1 - eo(lp)) * 18 * S}px)`; x.drawImage(logo, -lw / 2, -lh / 2, lw, lh); x.filter = 'none';
+  const sp = prog(lt, 1.0, 2.0);
+  if (sp > 0 && sp < 1) {
+    x.save(); const bx = -lw / 2 - 300 * S + sp * (lw + 600 * S);
+    x.beginPath(); x.moveTo(bx, -lh); x.lineTo(bx + 120 * S, -lh); x.lineTo(bx - 60 * S, lh); x.lineTo(bx - 180 * S, lh); x.closePath(); x.clip();
+    x.drawImage(logoGold, -lw / 2, -lh / 2, lw, lh); x.restore();
+  }
+  x.restore();
+  const l2 = eo(prog(lt, .9, 1.6)), ly = H * .38 + lh / 2 + 100 * S;
+  x.fillStyle = GOLD; x.fillRect(W / 2 - 300 * S * l2, ly, 600 * S * l2, 4 * S);
+  // service list
+  const svc = ['TOʻY SYOMKASI', 'LOVE STORY', 'FOTOSESSIYA', 'DRON SYOMKA'];
+  svc.forEach((s, i) => maskText('✦  ' + s, W / 2, ly + (80 + i * 68) * S, 44 * S, 'Montserrat', i % 2 ? GOLD2 : '#fff', prog(lt, 1.2 + i * .18, 1.7 + i * .18), { weight: 800, spacing: 3 * S }));
+  const bp = back(prog(lt, 2.3, 2.9));
+  if (bp > 0) {
+    const pulse = 1 + .035 * Math.sin((lt - 2.9) * 6) * prog(lt, 2.9, 3.1);
+    const bw = 620 * S, bh = 120 * S, by = ly + 430 * S;
+    x.save(); x.translate(W / 2, by); x.scale(bp * pulse, bp * pulse);
+    const g = x.createLinearGradient(-bw / 2, 0, bw / 2, 0); g.addColorStop(0, '#b8863b'); g.addColorStop(.5, GOLD2); g.addColorStop(1, '#b8863b');
+    x.fillStyle = g; x.beginPath(); x.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); x.fill();
+    text('BUYURTMA BERING', 0, 2 * S, 50 * S, 'Montserrat', '#111', { weight: 800, spacing: 4 * S });
+    x.restore();
+  }
+  x.restore();
+}
+
+function flash(t, at, dur = .35) {
+  const p = (t - at) / dur; if (p < 0 || p > 1) return;
+  x.save(); x.globalAlpha = p < .15 ? p / .15 : 1 - (p - .15) / .85; x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.restore();
+}
+
+function render(t) {
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none';
+  background(t);
+  sIntro(t); sWedding(t); sBTS(t); sLove(t);
+  if (t >= T_LOGO) { background(t); sLogo(t); }
+  for (const ft of [T_WED, T_BTS, T_LOVE]) flash(t, ft - .1);
+  flash(t, T_LOGO - .1, .5);
+  const v = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .4, W / 2, H / 2, Math.max(W, H) * .75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.6)'); x.fillStyle = v; x.fillRect(0, 0, W, H);
+  x.save(); x.globalCompositeOperation = 'overlay';
+  const gi = grain[Math.floor(t * 24) % grain.length]; x.imageSmoothingEnabled = false; x.drawImage(gi, 0, 0, W, H); x.restore();
+  const fi = 1 - prog(t, 0, .4); if (fi > 0) { x.fillStyle = `rgba(0,0,0,${fi})`; x.fillRect(0, 0, W, H); }
+}
+
+window.ready = Promise.all([document.fonts.ready, new Promise(r => logo.complete ? r() : logo.onload = r)])
+  .then(() => Promise.all([document.fonts.load('100px Anton'), document.fonts.load('800 100px Montserrat'), document.fonts.load('700 100px Montserrat'), document.fonts.load('500 100px Montserrat')]))
+  .then(() => { prepLogo(); render(0); return true; });
+window.render = render;
+if (!new URLSearchParams(location.search).get('capture')) {
+  window.ready.then(() => { const st = performance.now(); (function loop() { render(((performance.now() - st) / 1000) % 20); requestAnimationFrame(loop); })(); });
+}
+</script>
+</body></html>
