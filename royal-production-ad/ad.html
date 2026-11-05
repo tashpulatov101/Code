@@ -144,7 +144,7 @@ function scene2(t) { // 3.2 – 6.6  VIDEO
   text('VIDEO', 0, 0, 300 * S, 'Anton', 'rgba(217,173,87,.35)', { stroke: 3 * S, spacing: 20 * S, alpha: 1 });
   x.restore();
   maskText('VIDEO', W / 2, H * .52, 300 * S, 'Anton', '#fff', prog(lt, .15, .7), { spacing: 20 * S });
-  const items = ["TO'Y", 'KLIP', 'REKLAMA', 'EVENT'];
+  const items = ['TOʻY', 'KLIP', 'REKLAMA', 'TADBIR'];
   const row = items.join('   •   ');
   maskText(row, W / 2, H * .635, 42 * S, 'Montserrat', GOLD2, prog(lt, .8, 1.3), { weight: 700, spacing: 4 * S });
   maskText('4K SIFAT • KINEMATOGRAFIK MONTAJ', W / 2, H * .68, 34 * S, 'Montserrat', 'rgba(255,255,255,.8)', prog(lt, 1.1, 1.6), { weight: 500, spacing: 5 * S });
@@ -187,9 +187,9 @@ function scene3(t) { // 6.6 – 10  PHOTO
   aperture(W / 2, H * .34, 250 * S, open, lt * .4);
   x.restore();
   x.save(); x.globalAlpha = a;
-  maskText('PHOTO', W / 2, H * .58, 300 * S, 'Anton', '#fff', prog(lt, .35, .9), { spacing: 20 * S });
-  maskText('PORTRET   •   LOVE STORY   •   STUDIYA', W / 2, H * .695, 40 * S, 'Montserrat', GOLD2, prog(lt, .9, 1.4), { weight: 700, spacing: 3 * S });
-  maskText('PROFESSIONAL YORUG‘LIK • RETUSH', W / 2, H * .74, 34 * S, 'Montserrat', 'rgba(255,255,255,.8)', prog(lt, 1.2, 1.7), { weight: 500, spacing: 5 * S });
+  maskText('FOTO', W / 2, H * .58, 300 * S, 'Anton', '#fff', prog(lt, .35, .9), { spacing: 20 * S });
+  maskText('PORTRET   •   SEVGI TARIXI   •   STUDIYA', W / 2, H * .695, 40 * S, 'Montserrat', GOLD2, prog(lt, .9, 1.4), { weight: 700, spacing: 3 * S });
+  maskText('PROFESSIONAL YORUGʻLIK • RETUSH', W / 2, H * .74, 34 * S, 'Montserrat', 'rgba(255,255,255,.8)', prog(lt, 1.2, 1.7), { weight: 500, spacing: 5 * S });
   // shots counter
   const n = Math.min(36, Math.floor(prog(lt, .4, 3) * 36) + 1);
   text(`[ ${String(n).padStart(2, '0')} / 36 ]`, W / 2, H * .79, 30 * S, 'Montserrat', 'rgba(255,255,255,.55)', { weight: 500, spacing: 6 * S, alpha: prog(lt, 1.4, 1.8) });
