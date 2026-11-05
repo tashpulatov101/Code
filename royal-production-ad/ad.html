@@ -1,0 +1,283 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Montserrat:wght@500;700;800&display=block" rel="stylesheet">
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+</head><body>
+<canvas id="c"></canvas>
+<script>
+const W = +(new URLSearchParams(location.search).get('w') || 1080);
+const H = +(new URLSearchParams(location.search).get('h') || 1920);
+const c = document.getElementById('c'); c.width = W; c.height = H;
+const x = c.getContext('2d');
+const GOLD = '#d9ad57', GOLD2 = '#f6dc9a', RED = '#ff3b30';
+const S = Math.min(W, H) / 1080;           // scale unit
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eo = p => 1 - Math.pow(1 - p, 3);
+const eio = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+const back = p => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+
+// seeded noise frames for film grain
+function rng(s) { return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+const grain = [];
+for (let k = 0; k < 6; k++) {
+  const g = document.createElement('canvas'); g.width = 270; g.height = 480;
+  const gx = g.getContext('2d'), id = gx.createImageData(270, 480), r = rng(k * 977 + 13);
+  for (let i = 0; i < id.data.length; i += 4) { const v = r() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 22; }
+  gx.putImageData(id, 0, 0); grain.push(g);
+}
+
+const logo = new Image(); logo.src = 'logo.png';
+let logoGold;  // gold-tinted copy for shine
+function prepLogo() {
+  const g = document.createElement('canvas'); g.width = logo.width; g.height = logo.height;
+  const gx = g.getContext('2d'); gx.drawImage(logo, 0, 0);
+  gx.globalCompositeOperation = 'source-atop'; gx.fillStyle = GOLD2; gx.fillRect(0, 0, g.width, g.height);
+  logoGold = g;
+}
+
+function text(str, px, py, size, font, color, opts = {}) {
+  x.save();
+  x.font = `${opts.weight || ''} ${size}px ${font}`;
+  x.textAlign = opts.align || 'center'; x.textBaseline = 'middle';
+  if (opts.spacing) x.letterSpacing = opts.spacing + 'px';
+  x.globalAlpha *= opts.alpha ?? 1;
+  if (opts.stroke) { x.lineWidth = opts.stroke; x.strokeStyle = color; x.strokeText(str, px, py); }
+  else { x.fillStyle = color; x.fillText(str, px, py); }
+  x.restore();
+}
+// text revealed by sliding up from behind a mask line
+function maskText(str, px, py, size, font, color, p, opts = {}) {
+  x.save();
+  x.beginPath(); x.rect(0, py - size * .75, W, size * 1.5); x.clip();
+  text(str, px, py + (1 - eo(p)) * size * 1.4, size, font, color, opts);
+  x.restore();
+}
+
+function background(t) {
+  const g = x.createRadialGradient(W / 2, H * .45, 0, W / 2, H * .45, H * .8);
+  g.addColorStop(0, '#1c1712'); g.addColorStop(.55, '#0b0a09'); g.addColorStop(1, '#000');
+  x.fillStyle = g; x.fillRect(0, 0, W, H);
+  // drifting light leaks
+  x.save(); x.globalCompositeOperation = 'lighter';
+  const leaks = [[.2, .25, 0, 'rgba(217,173,87,'], [.85, .7, 2, 'rgba(255,120,60,'], [.5, .95, 4, 'rgba(217,173,87,']];
+  for (const [lx, ly, ph, col] of leaks) {
+    const cx = W * (lx + .12 * Math.sin(t * .6 + ph)), cy = H * (ly + .06 * Math.cos(t * .5 + ph)), r = 520 * S;
+    const lg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+    lg.addColorStop(0, col + '0.16)'); lg.addColorStop(1, col + '0)');
+    x.fillStyle = lg; x.fillRect(0, 0, W, H);
+  }
+  x.restore();
+}
+
+function viewfinder(t, a) {
+  if (a <= 0) return;
+  x.save(); x.globalAlpha = a;
+  const m = 70 * S, L = 110 * S;
+  x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 5 * S;
+  const corners = [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]];
+  for (const [cx, cy, dx, dy] of corners) {
+    x.beginPath(); x.moveTo(cx, cy + dy * L); x.lineTo(cx, cy); x.lineTo(cx + dx * L, cy); x.stroke();
+  }
+  // REC
+  if (Math.floor(t * 2) % 2 === 0) { x.fillStyle = RED; x.beginPath(); x.arc(m + 50 * S, m + 70 * S, 14 * S, 0, 7); x.fill(); }
+  text('REC', m + 80 * S, m + 71 * S, 38 * S, 'Montserrat', '#fff', { weight: 700, align: 'left', spacing: 4 * S });
+  const f = Math.floor(t * 25) % 25, s = Math.floor(t);
+  text(`00:00:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`, W - m - 40 * S, m + 71 * S, 34 * S, 'Montserrat', '#fff', { weight: 500, align: 'right' });
+  text('4K  •  60FPS', m + 40 * S, H - m - 60 * S, 30 * S, 'Montserrat', 'rgba(255,255,255,.8)', { weight: 500, align: 'left', spacing: 3 * S });
+  // battery
+  const bx = W - m - 140 * S, by = H - m - 78 * S;
+  x.strokeStyle = '#fff'; x.lineWidth = 3 * S; x.strokeRect(bx, by, 90 * S, 36 * S);
+  x.fillStyle = '#fff'; x.fillRect(bx + 92 * S, by + 10 * S, 8 * S, 16 * S); x.fillRect(bx + 6 * S, by + 6 * S, 64 * S, 24 * S);
+  // focus cross
+  x.strokeStyle = 'rgba(255,255,255,.5)'; x.lineWidth = 2 * S;
+  const fc = 26 * S; x.beginPath(); x.moveTo(W / 2 - fc, H / 2); x.lineTo(W / 2 + fc, H / 2); x.moveTo(W / 2, H / 2 - fc); x.lineTo(W / 2, H / 2 + fc); x.stroke();
+  x.restore();
+}
+
+// ---------- SCENES ----------
+function scene1(t) { // 0 – 3.2
+  const a = 1 - prog(t, 3.0, 3.2);
+  viewfinder(t, eo(prog(t, 0, .5)) * a);
+  x.save(); x.globalAlpha = a;
+  const zoom = 1 + t * .015; x.translate(W / 2, H / 2); x.scale(zoom, zoom); x.translate(-W / 2, -H / 2);
+  maskText('HAR BIR', W / 2, H / 2 - 300 * S, 190 * S, 'Anton', '#fff', prog(t, .3, .9), { spacing: 6 * S });
+  maskText('LAHZA', W / 2, H / 2 - 40 * S, 250 * S, 'Anton', GOLD, prog(t, .55, 1.15), { spacing: 8 * S });
+  maskText('TARIXGA AYLANADI', W / 2, H / 2 + 150 * S, 78 * S, 'Montserrat', '#fff', prog(t, 1.2, 1.8), { weight: 800, spacing: 10 * S });
+  const lp = eo(prog(t, 1.6, 2.4)); x.fillStyle = GOLD; x.fillRect(W / 2 - 220 * S * lp, H / 2 + 230 * S, 440 * S * lp, 5 * S);
+  x.restore();
+}
+
+function filmStrip(cx, cy, w, len, angle, offset, a) {
+  x.save(); x.globalAlpha = a; x.translate(cx, cy); x.rotate(angle);
+  x.fillStyle = '#0e0d0c'; x.fillRect(-len / 2, -w / 2, len, w);
+  const hole = w * .09, gap = w * .2, fw = w * .62;
+  x.fillStyle = 'rgba(255,255,255,.8)';
+  const o = ((offset % gap) + gap) % gap;
+  for (let px = -len / 2 - gap + o; px < len / 2; px += gap) {
+    x.fillRect(px, -w / 2 + w * .05, hole * 1.3, hole); x.fillRect(px, w / 2 - w * .05 - hole, hole * 1.3, hole);
+  }
+  const fo = ((offset % (fw * 1.1)) + fw * 1.1) % (fw * 1.1);
+  for (let px = -len / 2 - fw * 1.1 + fo; px < len / 2; px += fw * 1.1) {
+    const g = x.createLinearGradient(px, -fw / 2, px + fw, fw / 2);
+    g.addColorStop(0, 'rgba(217,173,87,.55)'); g.addColorStop(1, 'rgba(120,60,30,.35)');
+    x.fillStyle = g; x.fillRect(px, -fw / 2, fw, fw);
+  }
+  x.restore();
+}
+
+function scene2(t) { // 3.2 – 6.6  VIDEO
+  const lt = t - 3.2, a = prog(lt, 0, .2) * (1 - prog(t, 6.4, 6.6));
+  if (a <= 0) return;
+  const sw = 230 * S, L = Math.hypot(W, H) * 1.3;
+  filmStrip(W / 2, H * .2, sw, L, -.32, lt * 520 * S, a * .9);
+  filmStrip(W / 2, H * .84, sw, L, -.32, -lt * 520 * S, a * .9);
+  x.save(); x.globalAlpha = a;
+  // play button
+  const pp = back(prog(lt, .1, .6)), pr = 95 * S * pp;
+  x.save(); x.translate(W / 2, H * .37);
+  x.strokeStyle = GOLD; x.lineWidth = 6 * S; x.beginPath(); x.arc(0, 0, pr, 0, 7); x.stroke();
+  x.fillStyle = '#fff'; x.beginPath(); x.moveTo(-pr * .3, -pr * .45); x.lineTo(pr * .5, 0); x.lineTo(-pr * .3, pr * .45); x.closePath(); x.fill();
+  x.restore();
+  const vs = 1.25 - .25 * eo(prog(lt, 0, .6));
+  x.save(); x.translate(W / 2, H * .52); x.scale(vs, vs);
+  text('VIDEO', 0, 0, 300 * S, 'Anton', 'rgba(217,173,87,.35)', { stroke: 3 * S, spacing: 20 * S, alpha: 1 });
+  x.restore();
+  maskText('VIDEO', W / 2, H * .52, 300 * S, 'Anton', '#fff', prog(lt, .15, .7), { spacing: 20 * S });
+  const items = ["TO'Y", 'KLIP', 'REKLAMA', 'EVENT'];
+  const row = items.join('   •   ');
+  maskText(row, W / 2, H * .635, 42 * S, 'Montserrat', GOLD2, prog(lt, .8, 1.3), { weight: 700, spacing: 4 * S });
+  maskText('4K SIFAT • KINEMATOGRAFIK MONTAJ', W / 2, H * .68, 34 * S, 'Montserrat', 'rgba(255,255,255,.8)', prog(lt, 1.1, 1.6), { weight: 500, spacing: 5 * S });
+  x.restore();
+}
+
+function aperture(cx, cy, R, open, rot) {
+  // iris: draw 6 blades as dark polygons, leaving hexagonal hole of radius open*R
+  x.save(); x.translate(cx, cy); x.rotate(rot);
+  x.beginPath(); x.arc(0, 0, R, 0, 7); x.clip();
+  const r = Math.max(open * R, 1);
+  const hg = x.createRadialGradient(0, 0, 0, 0, 0, r); hg.addColorStop(0, 'rgba(246,220,154,.35)'); hg.addColorStop(1, 'rgba(217,173,87,.05)');
+  x.fillStyle = hg; x.beginPath(); x.arc(0, 0, r, 0, 7); x.fill();
+  x.fillStyle = '#16130f'; x.beginPath(); x.rect(-R, -R, 2 * R, 2 * R);
+  for (let i = 0; i < 6; i++) { const ang = i * Math.PI / 3; x.lineTo(Math.cos(ang) * r, Math.sin(ang) * r); }
+  x.closePath(); x.fill('evenodd');
+  x.strokeStyle = 'rgba(217,173,87,.6)'; x.lineWidth = 2 * S;
+  for (let i = 0; i < 6; i++) {
+    const ang = i * Math.PI / 3, a2 = ang + Math.PI / 3;
+    x.beginPath(); x.moveTo(Math.cos(ang) * r, Math.sin(ang) * r);
+    x.lineTo(Math.cos(a2 - .5) * R * 1.2, Math.sin(a2 - .5) * R * 1.2); x.stroke();
+  }
+  x.restore();
+  x.save(); x.strokeStyle = GOLD; x.lineWidth = 8 * S; x.beginPath(); x.arc(cx, cy, R, 0, 7); x.stroke();
+  x.lineWidth = 2 * S; x.strokeStyle = 'rgba(217,173,87,.5)'; x.beginPath(); x.arc(cx, cy, R + 22 * S, 0, 7); x.stroke();
+  // tick marks
+  for (let i = 0; i < 60; i++) {
+    const an = i / 60 * Math.PI * 2 + rot * .3, l = i % 5 ? 10 : 22;
+    x.beginPath(); x.moveTo(cx + Math.cos(an) * (R + 30 * S), cy + Math.sin(an) * (R + 30 * S));
+    x.lineTo(cx + Math.cos(an) * (R + (30 + l) * S), cy + Math.sin(an) * (R + (30 + l) * S)); x.stroke();
+  }
+  x.restore();
+}
+
+function scene3(t) { // 6.6 – 10  PHOTO
+  const lt = t - 6.6, a = prog(lt, 0, .2) * (1 - prog(t, 9.8, 10));
+  if (a <= 0) return;
+  x.save(); x.globalAlpha = a;
+  const open = .05 + .85 * eio(prog(lt, .1, 1.1));
+  aperture(W / 2, H * .34, 250 * S, open, lt * .4);
+  x.restore();
+  x.save(); x.globalAlpha = a;
+  maskText('PHOTO', W / 2, H * .58, 300 * S, 'Anton', '#fff', prog(lt, .35, .9), { spacing: 20 * S });
+  maskText('PORTRET   •   LOVE STORY   •   STUDIYA', W / 2, H * .695, 40 * S, 'Montserrat', GOLD2, prog(lt, .9, 1.4), { weight: 700, spacing: 3 * S });
+  maskText('PROFESSIONAL YORUG‘LIK • RETUSH', W / 2, H * .74, 34 * S, 'Montserrat', 'rgba(255,255,255,.8)', prog(lt, 1.2, 1.7), { weight: 500, spacing: 5 * S });
+  // shots counter
+  const n = Math.min(36, Math.floor(prog(lt, .4, 3) * 36) + 1);
+  text(`[ ${String(n).padStart(2, '0')} / 36 ]`, W / 2, H * .79, 30 * S, 'Montserrat', 'rgba(255,255,255,.55)', { weight: 500, spacing: 6 * S, alpha: prog(lt, 1.4, 1.8) });
+  x.restore();
+}
+
+function scene4(t) { // 10 – 15  LOGO
+  const lt = t - 10;
+  if (lt < 0) return;
+  const fadeOut = 1 - prog(t, 14.6, 15);
+  x.save(); x.globalAlpha = fadeOut;
+  // rotating rays
+  x.save(); x.translate(W / 2, H * .42); x.rotate(lt * .15); x.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 12; i++) {
+    x.rotate(Math.PI / 6);
+    const g = x.createLinearGradient(0, 0, 0, -H * .6); g.addColorStop(0, 'rgba(217,173,87,.10)'); g.addColorStop(1, 'rgba(217,173,87,0)');
+    x.fillStyle = g; x.beginPath(); x.moveTo(0, 0); x.lineTo(-60 * S, -H * .6); x.lineTo(60 * S, -H * .6); x.closePath();
+    x.globalAlpha = fadeOut * prog(lt, .2, 1); x.fill();
+  }
+  x.restore();
+
+  const lp = prog(lt, 0, .9);
+  const lw = W * .86, lh = lw * logo.height / logo.width;
+  const sc = 1.25 - .25 * eo(lp);
+  x.save(); x.translate(W / 2, H * .42); x.scale(sc, sc);
+  x.globalAlpha = fadeOut * eo(lp);
+  x.filter = `blur(${(1 - eo(lp)) * 18 * S}px)`;
+  x.drawImage(logo, -lw / 2, -lh / 2, lw, lh);
+  x.filter = 'none';
+  // shine sweep using gold logo copy clipped to a moving diagonal band
+  const sp = prog(lt, 1.0, 2.0);
+  if (sp > 0 && sp < 1) {
+    x.save();
+    const bx = -lw / 2 - 300 * S + sp * (lw + 600 * S);
+    x.beginPath(); x.moveTo(bx, -lh); x.lineTo(bx + 120 * S, -lh); x.lineTo(bx - 60 * S, lh); x.lineTo(bx - 180 * S, lh); x.closePath(); x.clip();
+    x.drawImage(logoGold, -lw / 2, -lh / 2, lw, lh);
+    x.restore();
+  }
+  x.restore();
+
+  // gold line + tagline + CTA
+  const l2 = eo(prog(lt, .9, 1.6)), ly = H * .42 + lh / 2 + 110 * S;
+  x.fillStyle = GOLD; x.fillRect(W / 2 - 300 * S * l2, ly, 600 * S * l2, 4 * S);
+  maskText("SIZNING ENG YORQIN KUNLARINGIZ", W / 2, ly + 80 * S, 44 * S, 'Montserrat', '#fff', prog(lt, 1.3, 1.9), { weight: 800, spacing: 3 * S });
+  maskText('BIZNING OBYEKTIVIMIZDA', W / 2, ly + 140 * S, 44 * S, 'Montserrat', GOLD2, prog(lt, 1.5, 2.1), { weight: 800, spacing: 3 * S });
+
+  const bp = back(prog(lt, 2.2, 2.8));
+  if (bp > 0) {
+    const pulse = 1 + .035 * Math.sin((lt - 2.8) * 6) * prog(lt, 2.8, 3);
+    const bw = 620 * S, bh = 120 * S, by = ly + 300 * S;
+    x.save(); x.translate(W / 2, by); x.scale(bp * pulse, bp * pulse);
+    const g = x.createLinearGradient(-bw / 2, 0, bw / 2, 0); g.addColorStop(0, '#b8863b'); g.addColorStop(.5, GOLD2); g.addColorStop(1, '#b8863b');
+    x.fillStyle = g; x.beginPath(); x.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); x.fill();
+    text('BUYURTMA BERING', 0, 2 * S, 50 * S, 'Montserrat', '#111', { weight: 800, spacing: 4 * S });
+    x.restore();
+  }
+  text('VIDEO  •  FOTO  •  MONTAJ', W / 2, H - 150 * S, 32 * S, 'Montserrat', 'rgba(255,255,255,.6)', { weight: 500, spacing: 8 * S, alpha: prog(lt, 2.6, 3.2) });
+  x.restore();
+}
+
+function flash(t, at, dur = .35) {
+  const p = (t - at) / dur;
+  if (p < 0 || p > 1) return;
+  x.save(); x.globalAlpha = p < .15 ? p / .15 : 1 - (p - .15) / .85; x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.restore();
+}
+
+function render(t) {
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none';
+  // camera shake on hits
+  background(t);
+  scene1(t); scene2(t); scene3(t); scene4(t);
+  flash(t, 3.1); flash(t, 6.5); flash(t, 9.9, .5);
+  // letterbox-ish vignette
+  const v = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .4, W / 2, H / 2, Math.max(W, H) * .75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.65)'); x.fillStyle = v; x.fillRect(0, 0, W, H);
+  x.save(); x.globalCompositeOperation = 'overlay';
+  const gi = grain[Math.floor(t * 24) % grain.length]; x.imageSmoothingEnabled = false; x.drawImage(gi, 0, 0, W, H);
+  x.restore();
+  // fade in from black
+  const fi = 1 - prog(t, 0, .4); if (fi > 0) { x.fillStyle = `rgba(0,0,0,${fi})`; x.fillRect(0, 0, W, H); }
+}
+
+window.ready = Promise.all([document.fonts.ready, new Promise(r => logo.complete ? r() : logo.onload = r)])
+  .then(() => Promise.all([document.fonts.load('100px Anton'), document.fonts.load('800 100px Montserrat'), document.fonts.load('700 100px Montserrat'), document.fonts.load('500 100px Montserrat')]))
+  .then(() => { prepLogo(); render(0); return true; });
+window.render = render;
+if (!new URLSearchParams(location.search).get('capture')) {
+  window.ready.then(() => { const st = performance.now(); (function loop() { render(((performance.now() - st) / 1000) % 15); requestAnimationFrame(loop); })(); });
+}
+</script>
+</body></html>
