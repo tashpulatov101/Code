@@ -32,10 +32,13 @@ def read_wav(p):
         a = np.interp(x, np.arange(len(a)), a)
     return a
 
+if os.environ.get("NATURAL_VOICE"):
+    subprocess.run(["python3", f"{OUT}/tts.py", f"{OUT}/mms_uzb", f"{OUT}/lines_cyr.txt", OUT], check=True)
 voices = []
 for i, t in enumerate(lines):
     p = f"{OUT}/v{i}.wav"
-    subprocess.run(["espeak-ng", "-v", "uz", "-s", "128", "-p", "40", "-a", "180", "-w", p, t.replace("ʻ", "'")], check=True)
+    if not os.environ.get("NATURAL_VOICE"):
+        subprocess.run(["espeak-ng", "-v", "uz", "-s", "128", "-p", "40", "-a", "180", "-w", p, t.replace("ʻ", "'")], check=True)
     voices.append(read_wav(p))
 
 PAD_START, PAD_END = 0.5, 0.9
